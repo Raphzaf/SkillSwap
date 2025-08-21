@@ -1,0 +1,7 @@
+name,age,bio,photo,teach_tags,learn_tags
+Ava,26,Designer turned maker.,https://images.unsplash.com/photo-1502685104226-ee32379fefbe,"Figma|Branding|Prototyping","Python|3D Printing"
+Mateo,29,Frontend engineer exploring creative coding.,https://images.unsplash.com/photo-1527980965255-d3b416303d12,"React|CSS Animations","Public Speaking|Music Theory"
+Sofia,24,Barista by day, aspiring photographer.,https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e,"Latte Art|Portrait Photography","Copywriting|Javascript"
+Noah,31,PM who enjoys woodworking and trails.,https://images.unsplash.com/photo-1544005313-94ddf0286df2,"Roadmapping|Interviewing","UI Design|Woodworking"
+Maya,27,Community builder and facilitator.,https://images.unsplash.com/photo-1547425260-76bcadfb4f2c,"Community Ops|Facilitation","SQL|Motion Graphics"
+Leo,34,Hardware tinkerer and cyclist.,https://images.unsplash.com/photo-1541534401786-2077eed87a72,"Arduino|Soldering","Illustration|Kotlin"
