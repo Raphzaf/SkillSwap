@@ -6,21 +6,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Outils de build (cryptography, motor, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
  && rm -rf /var/lib/apt/lists/*
 
-# Dépendances
+# ⬇️ Copie seulement requirements.txt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Code
-COPY backend/ .
+# ⬇️ Puis copie tout le backend
+COPY . .
 
-# Port
 ENV PORT=8001
 EXPOSE 8001
 
-# Uvicorn
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001"]
