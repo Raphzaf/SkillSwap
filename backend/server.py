@@ -179,6 +179,9 @@ class SessionCreate(BaseModel):
     endAt: Optional[datetime] = None
     locationType: Literal["online", "in_person"]
     locationValue: str
+    creditValue: Optional[int] = None
+    teacherId: Optional[str] = None
+    learnerId: Optional[str] = None
 
 class SessionUpdate(BaseModel):
     status: Literal["confirmed", "cancelled"]
@@ -187,6 +190,12 @@ class RatingCreate(BaseModel):
     sessionId: str
     stars: int
     comment: Optional[str] = ""
+    teachingQuality: Optional[int] = Field(None, ge=1, le=5)
+    communication: Optional[int] = Field(None, ge=1, le=5)
+    punctuality: Optional[int] = Field(None, ge=1, le=5)
+    overallExperience: Optional[int] = Field(None, ge=1, le=5)
+    skillRated: Optional[str] = None
+    reviewText: Optional[str] = Field(None, max_length=500)
 
 # -----------------------------------------------------------------------------
 # INDEXES
@@ -223,6 +232,10 @@ async def ensure_indexes():
 
     await db.idempotency.create_index([("key", 1), ("userId", 1)], unique=True, name="idem_key_user_unique")
     await db.idempotency.create_index("expiresAt", expireAfterSeconds=0, name="idem_ttl")
+
+    # Credit transactions indexes
+    await db.credit_transactions.create_index([("userId", 1), ("createdAt", -1)], name="credit_trans_user_ts_idx")
+    await db.credit_transactions.create_index("sessionId", name="credit_trans_session_idx")
 
 # -----------------------------------------------------------------------------
 # UTILS (idempotency, ics, time, moderation, export)
@@ -363,6 +376,9 @@ async def get_or_create_user_by_email(email: str) -> dict:
         "photos": [],
         "avgRating": 0.0,
         "ratingsCount": 0,
+        "creditBalance": 100,
+        "creditEarned": 0,
+        "creditSpent": 0,
     }
     await db.users.insert_one(doc)
     return doc
@@ -431,6 +447,9 @@ async def auth_user(request: Request):
                 "photos": [],
                 "avgRating": 0.0,
                 "ratingsCount": 0,
+                "creditBalance": 100,
+                "creditEarned": 0,
+                "creditSpent": 0,
             }
             await db.users.insert_one(doc)
             u = doc
@@ -461,6 +480,9 @@ def to_user(u: dict) -> dict:
         "avgRating": round(float(u.get("avgRating", 0.0)), 2),
         "ratingsCount": int(u.get("ratingsCount", 0)),
         "locationCity": u.get("locationCity"),
+        "creditBalance": int(u.get("creditBalance", 100)),
+        "creditEarned": int(u.get("creditEarned", 0)),
+        "creditSpent": int(u.get("creditSpent", 0)),
     }
 
 def to_settings(s: dict) -> dict:
@@ -485,6 +507,10 @@ async def session_to_model(doc: dict) -> dict:
         "locationType": doc.get("locationType"),
         "locationValue": doc.get("locationValue"),
         "status": doc.get("status"),
+        "creditValue": doc.get("creditValue"),
+        "teacherId": doc.get("teacherId"),
+        "learnerId": doc.get("learnerId"),
+        "creditsProcessed": doc.get("creditsProcessed", False),
         "createdAt": doc.get("createdAt").isoformat() if doc.get("createdAt") else None,
         "updatedAt": doc.get("updatedAt").isoformat() if doc.get("updatedAt") else None,
     }
@@ -595,6 +621,9 @@ async def auth_register(payload: AuthRegister, request: Request):
             "photos": [],
             "avgRating": 0.0,
             "ratingsCount": 0,
+            "creditBalance": 100,
+            "creditEarned": 0,
+            "creditSpent": 0,
             **creds,
         }
         await db.users.insert_one(user)
@@ -668,8 +697,51 @@ async def update_me(payload: MeUpdate, user=Depends(auth_user)):
     if "bio" in upd and upd["bio"] and len(upd["bio"]) > 500:
         raise HTTPException(status_code=400, detail="bio_too_long")
 
+    # Check profile completeness before update
+    old_user = await db.users.find_one({"_id": user.id})
+    was_complete = (
+        old_user.get("name") and
+        old_user.get("age") and
+        old_user.get("bio") and
+        len(old_user.get("skillsTeach", [])) > 0 and
+        len(old_user.get("skillsLearn", [])) > 0 and
+        len(old_user.get("photos", [])) > 0
+    )
+    
     await db.users.update_one({"_id": user.id}, {"$set": upd})
     u = await db.users.find_one({"_id": user.id})
+    
+    # Check if profile is now complete and award bonus
+    is_complete = (
+        u.get("name") and
+        u.get("age") and
+        u.get("bio") and
+        len(u.get("skillsTeach", [])) > 0 and
+        len(u.get("skillsLearn", [])) > 0 and
+        len(u.get("photos", [])) > 0
+    )
+    
+    # Award profile completion bonus (one time only)
+    if not was_complete and is_complete:
+        bonus = 20
+        await db.users.update_one(
+            {"_id": user.id},
+            {"$inc": {"creditBalance": bonus, "creditEarned": bonus}}
+        )
+        await db.credit_transactions.insert_one({
+            "_id": str(uuid.uuid4()),
+            "userId": user.id,
+            "fromUserId": None,
+            "toUserId": user.id,
+            "amount": bonus,
+            "type": "bonus",
+            "reason": "Profile completion bonus",
+            "balanceAfter": u.get("creditBalance", 100) + bonus,
+            "createdAt": _now_utc(),
+        })
+        # Refresh user data to include new balance
+        u = await db.users.find_one({"_id": user.id})
+    
     return {"user": to_user(u)}
 
 @api.put("/me/settings")
@@ -980,6 +1052,37 @@ async def create_session(payload: SessionCreate, user=Depends(auth_user), idempo
     participants = match.get("users", [])
 
     end_at = payload.endAt or (payload.startAt + timedelta(minutes=int(payload.durationMin or 60)))
+    
+    # Calculate credit value if not provided
+    credit_value = payload.creditValue
+    if credit_value is None:
+        duration_hours = (end_at - start_at).total_seconds() / 3600
+        credit_value = int(duration_hours * 10)  # 10 credits per hour base rate
+    
+    # Validate credit value is positive
+    if credit_value < 0:
+        raise HTTPException(status_code=400, detail="credit_value_must_be_positive")
+    
+    # Determine teacher and learner
+    teacher_id = payload.teacherId or user.id
+    learner_id = payload.learnerId
+    if not learner_id:
+        # If not specified, the other participant is the learner
+        learner_id = [p for p in participants if p != teacher_id][0] if len(participants) == 2 else user.id
+    
+    # Check if learner has enough credits
+    if learner_id != user.id:
+        learner = await db.users.find_one({"_id": learner_id}, {"creditBalance": 1})
+    else:
+        learner = await db.users.find_one({"_id": user.id}, {"creditBalance": 1})
+    
+    if not learner:
+        raise HTTPException(status_code=404, detail="learner_not_found")
+    
+    learner_balance = int(learner.get("creditBalance", 0))
+    if learner_balance < credit_value:
+        raise HTTPException(status_code=400, detail="insufficient_credits")
+    
     doc = {
         "_id": str(uuid.uuid4()),
         "matchId": payload.matchId,
@@ -990,6 +1093,9 @@ async def create_session(payload: SessionCreate, user=Depends(auth_user), idempo
         "locationValue": payload.locationValue,
         "status": "proposed",
         "proposedBy": user.id,
+        "creditValue": credit_value,
+        "teacherId": teacher_id,
+        "learnerId": learner_id,
         "icsPath": None,
         "createdAt": now,
         "updatedAt": now,
@@ -1148,6 +1254,12 @@ async def create_rating(
         "rateeId": ratee_id,
         "stars": int(payload.stars),
         "comment": payload.comment or "",
+        "teachingQuality": payload.teachingQuality,
+        "communication": payload.communication,
+        "punctuality": payload.punctuality,
+        "overallExperience": payload.overallExperience,
+        "skillRated": payload.skillRated,
+        "reviewText": payload.reviewText,
         "createdAt": _now_utc(),
     }
     await db.ratings.insert_one(doc)
@@ -1181,6 +1293,122 @@ async def create_rating(
     )
 
     await save_idempotency(idempotency_key, user.id, {"ratingId": rid})
+    
+    # Check if session has credit value and both users have rated
+    session = await db.sessions.find_one({"_id": payload.sessionId})
+    if session and session.get("creditValue") and session.get("teacherId") and session.get("learnerId"):
+        # Count ratings for this session
+        rating_count = await db.ratings.count_documents({"sessionId": payload.sessionId})
+        
+        # If both users have now rated, process credit transfer
+        if rating_count == 2:
+            teacher_id = session["teacherId"]
+            learner_id = session["learnerId"]
+            credit_value = int(session["creditValue"])
+            
+            # Transfer credits from learner to teacher
+            await db.users.update_one(
+                {"_id": learner_id},
+                {
+                    "$inc": {
+                        "creditBalance": -credit_value,
+                        "creditSpent": credit_value
+                    }
+                }
+            )
+            
+            await db.users.update_one(
+                {"_id": teacher_id},
+                {
+                    "$inc": {
+                        "creditBalance": credit_value,
+                        "creditEarned": credit_value
+                    }
+                }
+            )
+            
+            # Record transaction
+            transaction_id = str(uuid.uuid4())
+            learner = await db.users.find_one({"_id": learner_id}, {"creditBalance": 1})
+            teacher = await db.users.find_one({"_id": teacher_id}, {"creditBalance": 1})
+            
+            # Transaction for learner (spending)
+            await db.credit_transactions.insert_one({
+                "_id": str(uuid.uuid4()),
+                "userId": learner_id,
+                "fromUserId": learner_id,
+                "toUserId": teacher_id,
+                "amount": -credit_value,
+                "sessionId": payload.sessionId,
+                "type": "session_payment",
+                "reason": f"Session payment to {session.get('teacherId')}",
+                "balanceAfter": learner.get("creditBalance", 0) if learner else 0,
+                "createdAt": _now_utc(),
+            })
+            
+            # Transaction for teacher (earning)
+            await db.credit_transactions.insert_one({
+                "_id": str(uuid.uuid4()),
+                "userId": teacher_id,
+                "fromUserId": learner_id,
+                "toUserId": teacher_id,
+                "amount": credit_value,
+                "sessionId": payload.sessionId,
+                "type": "session_payment",
+                "reason": f"Session payment from {session.get('learnerId')}",
+                "balanceAfter": teacher.get("creditBalance", 0) if teacher else 0,
+                "createdAt": _now_utc(),
+            })
+            
+            # Update session status to indicate credits processed
+            await db.sessions.update_one(
+                {"_id": payload.sessionId},
+                {"$set": {"creditsProcessed": True, "creditsProcessedAt": _now_utc()}}
+            )
+            
+            # Award bonus credits for high ratings
+            if int(payload.stars) >= 5:
+                await db.users.update_one(
+                    {"_id": ratee_id},
+                    {"$inc": {"creditBalance": 5, "creditEarned": 5}}
+                )
+                await db.credit_transactions.insert_one({
+                    "_id": str(uuid.uuid4()),
+                    "userId": ratee_id,
+                    "fromUserId": None,
+                    "toUserId": ratee_id,
+                    "amount": 5,
+                    "sessionId": payload.sessionId,
+                    "type": "bonus",
+                    "reason": "High rating bonus (5 stars)",
+                    "balanceAfter": (teacher.get("creditBalance", 0) if teacher and teacher_id == ratee_id else learner.get("creditBalance", 0)) + 5 if learner or teacher else 5,
+                    "createdAt": _now_utc(),
+                })
+            
+            # Award first session bonus (for both teacher and learner)
+            for participant_id in [teacher_id, learner_id]:
+                # Check if this is their first completed session
+                completed_sessions = await db.ratings.count_documents({"rateeId": participant_id})
+                if completed_sessions == 1:  # This is their first rating received
+                    bonus = 10
+                    await db.users.update_one(
+                        {"_id": participant_id},
+                        {"$inc": {"creditBalance": bonus, "creditEarned": bonus}}
+                    )
+                    participant = await db.users.find_one({"_id": participant_id}, {"creditBalance": 1})
+                    await db.credit_transactions.insert_one({
+                        "_id": str(uuid.uuid4()),
+                        "userId": participant_id,
+                        "fromUserId": None,
+                        "toUserId": participant_id,
+                        "amount": bonus,
+                        "sessionId": payload.sessionId,
+                        "type": "bonus",
+                        "reason": "First session completion bonus",
+                        "balanceAfter": participant.get("creditBalance", 0) if participant else 0,
+                        "createdAt": _now_utc(),
+                    })
+    
     return {
         "rating": {
             "id": rid,
@@ -1190,6 +1418,65 @@ async def create_rating(
             "stars": int(payload.stars),
             "comment": payload.comment or "",
         }
+    }
+
+# -----------------------------------------------------------------------------
+# ROUTES: CREDITS
+# -----------------------------------------------------------------------------
+@api.get("/credits/balance")
+@rate_limit(100, 60)
+async def get_credit_balance(user: Any = Depends(get_current_user)):
+    u = await db.users.find_one({"_id": user.id}, {
+        "creditBalance": 1,
+        "creditEarned": 1,
+        "creditSpent": 1
+    })
+    return {
+        "creditBalance": int(u.get("creditBalance", 100)),
+        "creditEarned": int(u.get("creditEarned", 0)),
+        "creditSpent": int(u.get("creditSpent", 0)),
+    }
+
+@api.get("/credits/history")
+@rate_limit(100, 60)
+async def get_credit_history(
+    user: Any = Depends(get_current_user),
+    limit: int = Query(30, ge=1, le=100),
+    cursor: Optional[str] = None
+):
+    query = {"userId": user.id}
+    
+    # Cursor-based pagination
+    if cursor:
+        try:
+            cursor_date = datetime.fromisoformat(cursor)
+            query["createdAt"] = {"$lt": cursor_date}
+        except Exception:
+            pass
+    
+    transactions = await db.credit_transactions.find(query).sort("createdAt", -1).limit(limit).to_list(length=limit)
+    
+    result = []
+    for tx in transactions:
+        result.append({
+            "id": tx["_id"],
+            "amount": tx["amount"],
+            "type": tx["type"],
+            "reason": tx.get("reason", ""),
+            "sessionId": tx.get("sessionId"),
+            "fromUserId": tx.get("fromUserId"),
+            "toUserId": tx.get("toUserId"),
+            "balanceAfter": tx.get("balanceAfter"),
+            "createdAt": tx["createdAt"].isoformat(),
+        })
+    
+    next_cursor = None
+    if len(result) == limit and result:
+        next_cursor = result[-1]["createdAt"]
+    
+    return {
+        "transactions": result,
+        "nextCursor": next_cursor
     }
 
 # -----------------------------------------------------------------------------
