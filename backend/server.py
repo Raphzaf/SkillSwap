@@ -3,7 +3,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, validator, EmailStr
+from pydantic import BaseModel, Field, field_validator, EmailStr, ConfigDict
 from typing import List, Optional, Literal, Dict, Any
 from pathlib import Path as SysPath
 from jose import jwt, JWTError
@@ -157,7 +157,8 @@ class SettingsUpdate(BaseModel):
     messagePrivacy: Optional[Literal["everyone", "matches_only"]] = None
     showOnlineStatus: Optional[bool] = None
 
-    @validator("ageRange")
+    @field_validator("ageRange")
+    @classmethod
     def _check_age_range(cls, v):
         if v is None:
             return v
