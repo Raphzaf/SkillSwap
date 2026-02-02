@@ -6,7 +6,8 @@ import { Label } from "../components/ui/label";
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
 import { useToast } from "../components/ui/use-toast";
-import { getMe, updateMe, updateSettings } from "../lib/api";
+import { getMe, updateMe, updateSettings, getCreditBalance, getCreditHistory } from "../lib/api";
+import { Coins } from "lucide-react";
 
 /* -------------------------- Petits sous-composants -------------------------- */
 
@@ -110,6 +111,13 @@ export default function Account() {
 
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  
+  // --- credits
+  const [creditBalance, setCreditBalance] = useState(100);
+  const [creditEarned, setCreditEarned] = useState(0);
+  const [creditSpent, setCreditSpent] = useState(0);
+  const [creditHistory, setCreditHistory] = useState([]);
+  const [loadingCredits, setLoadingCredits] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -137,6 +145,26 @@ export default function Account() {
         if (s.location?.coordinates) {
           setLon(s.location.coordinates[0]);
           setLat(s.location.coordinates[1]);
+        }
+        
+        // Load credit balance
+        try {
+          const credits = await getCreditBalance();
+          setCreditBalance(credits.creditBalance || 100);
+          setCreditEarned(credits.creditEarned || 0);
+          setCreditSpent(credits.creditSpent || 0);
+        } catch (e) {
+          console.error("Error loading credits:", e);
+        }
+        
+        // Load credit history
+        try {
+          const history = await getCreditHistory();
+          setCreditHistory(history.transactions || []);
+        } catch (e) {
+          console.error("Error loading credit history:", e);
+        } finally {
+          setLoadingCredits(false);
         }
       } catch (e) {
         console.error(e);
@@ -253,7 +281,55 @@ export default function Account() {
   const tzOptions = ["Europe/Paris","UTC","Europe/Brussels","America/New_York","Asia/Jerusalem"];
 
   return (
-    <div className="grid md:grid-cols-2 gap-6">
+    <div className="space-y-6">
+      {/* Credit Balance Card */}
+      <Card className="bg-gradient-to-r from-amber-50 to-yellow-50 dark:from-amber-950 dark:to-yellow-950">
+        <CardContent className="p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Coins className="h-6 w-6 text-amber-600" />
+                <h2 className="text-xl font-bold">Solde de Crédits</h2>
+              </div>
+              <div className="text-4xl font-bold text-amber-600">{creditBalance}</div>
+              <div className="text-sm text-muted-foreground mt-2">
+                <span className="text-green-600">+{creditEarned} gagnés</span>
+                {" · "}
+                <span className="text-red-600">-{creditSpent} dépensés</span>
+              </div>
+            </div>
+            <div className="text-right">
+              {creditBalance < 20 && (
+                <div className="text-sm text-amber-700 dark:text-amber-400 mb-2">
+                  ⚠️ Crédits bas
+                </div>
+              )}
+              <Button variant="outline" size="sm">
+                Gagner plus de crédits
+              </Button>
+            </div>
+          </div>
+          
+          {/* Credit History */}
+          {!loadingCredits && creditHistory.length > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <h3 className="text-sm font-semibold mb-2">Historique récent</h3>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {creditHistory.slice(0, 5).map((tx) => (
+                  <div key={tx.id} className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">{tx.reason}</span>
+                    <span className={tx.amount > 0 ? "text-green-600 font-medium" : "text-red-600 font-medium"}>
+                      {tx.amount > 0 ? "+" : ""}{tx.amount}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      
+      <div className="grid md:grid-cols-2 gap-6">
       {/* Profil */}
       <Card>
         <CardContent className="space-y-3 p-4">
@@ -339,6 +415,7 @@ export default function Account() {
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
