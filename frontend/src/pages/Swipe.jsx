@@ -8,6 +8,24 @@ import { Heart, X, Star, Sparkles, Info } from "lucide-react";
 import { CORAL, nextProfile } from "../mock";
 import { getCandidates, sendSwipe } from "../lib/api";
 
+// Helper to normalize candidate data from API
+const normalizeCandidate = (c) => ({
+  id: c.id,
+  name: c.name,
+  age: c.age,
+  bio: c.bio,
+  photos: c.photos || [],
+  skillsToTeach: c.skillsTeach || [],
+  skillsToLearn: c.skillsLearn || [],
+  distanceKm: c.distanceKm || 5,
+  avgRating: c.avgRating || 0,
+  ratingsCount: c.ratingsCount || 0,
+  creditBalance: c.creditBalance || 100,
+  matchScore: c.matchScore || 0,
+  matchReasons: c.matchReasons || [],
+  isMutualMatch: c.isMutualMatch || false,
+});
+
 export default function Swipe() {
   const [index, setIndex] = useState(0);
   const [outDir, setOutDir] = useState(null);
@@ -22,23 +40,7 @@ export default function Swipe() {
       try {
         const d = await getCandidates(0, 10);
         if (!mounted) return;
-        const items = (d.candidates || []).map((c) => ({
-          ...c,
-          id: c.id,
-          name: c.name,
-          age: c.age,
-          bio: c.bio,
-          photos: c.photos || [],
-          skillsToTeach: c.skillsTeach || [],
-          skillsToLearn: c.skillsLearn || [],
-          distanceKm: c.distanceKm || 5,
-          avgRating: c.avgRating || 0,
-          ratingsCount: c.ratingsCount || 0,
-          creditBalance: c.creditBalance || 100,
-          matchScore: c.matchScore || 0,
-          matchReasons: c.matchReasons || [],
-          isMutualMatch: c.isMutualMatch || false,
-        }));
+        const items = (d.candidates || []).map(normalizeCandidate);
         setDeck(items);
         setCursor(Number(d.nextCursor || 10));
       } catch (e) {
@@ -53,23 +55,7 @@ export default function Swipe() {
     if (deck.length - index > 3) return;
     try {
       const d = await getCandidates(cursor, 10);
-      const items = (d.candidates || []).map((c) => ({
-        ...c,
-        id: c.id,
-        name: c.name,
-        age: c.age,
-        bio: c.bio,
-        photos: c.photos || [],
-        skillsToTeach: c.skillsTeach || [],
-        skillsToLearn: c.skillsLearn || [],
-        distanceKm: c.distanceKm || 5,
-        avgRating: c.avgRating || 0,
-        ratingsCount: c.ratingsCount || 0,
-        creditBalance: c.creditBalance || 100,
-        matchScore: c.matchScore || 0,
-        matchReasons: c.matchReasons || [],
-        isMutualMatch: c.isMutualMatch || false,
-      }));
+      const items = (d.candidates || []).map(normalizeCandidate);
       setDeck((prev) => [...prev, ...items]);
       setCursor(Number(d.nextCursor || (cursor + 10)));
     } catch {}

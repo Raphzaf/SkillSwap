@@ -14,6 +14,7 @@ import uuid
 import hashlib
 import secrets
 import json
+import re
 from collections import defaultdict, deque
 from time import time
 from functools import wraps
@@ -1188,7 +1189,7 @@ async def create_session(payload: SessionCreate, user=Depends(auth_user), idempo
     credit_value = payload.creditValue
     if credit_value is None:
         duration_hours = (end_at - start_at).total_seconds() / 3600
-        credit_value = int(duration_hours * 10)  # 10 credits per hour base rate
+        credit_value = max(1, int(duration_hours * 10))  # 10 credits per hour base rate, minimum 1 credit
     
     # Validate credit value is positive
     if credit_value < 0:
@@ -1460,8 +1461,9 @@ async def create_rating(
             
             # Record transaction
             transaction_id = str(uuid.uuid4())
-            learner = await db.users.find_one({"_id": learner_id}, {"creditBalance": 1})
-            teacher = await db.users.find_one({"_id": teacher_id}, {"creditBalance": 1})
+            # Re-fetch balances after updates to get correct balanceAfter values
+            learner_updated = await db.users.find_one({"_id": learner_id}, {"creditBalance": 1, "name": 1})
+            teacher_updated = await db.users.find_one({"_id": teacher_id}, {"creditBalance": 1, "name": 1})
             
             # Transaction for learner (spending)
             await db.credit_transactions.insert_one({
@@ -1472,8 +1474,8 @@ async def create_rating(
                 "amount": -credit_value,
                 "sessionId": payload.sessionId,
                 "type": "session_payment",
-                "reason": f"Session payment to {session.get('teacherId')}",
-                "balanceAfter": learner.get("creditBalance", 0) if learner else 0,
+                "reason": f"Session payment to {teacher_updated.get('name', 'teacher') if teacher_updated else 'teacher'}",
+                "balanceAfter": learner_updated.get("creditBalance", 0) if learner_updated else 0,
                 "createdAt": _now_utc(),
             })
             
@@ -1486,8 +1488,8 @@ async def create_rating(
                 "amount": credit_value,
                 "sessionId": payload.sessionId,
                 "type": "session_payment",
-                "reason": f"Session payment from {session.get('learnerId')}",
-                "balanceAfter": teacher.get("creditBalance", 0) if teacher else 0,
+                "reason": f"Session payment from {learner_updated.get('name', 'learner') if learner_updated else 'learner'}",
+                "balanceAfter": teacher_updated.get("creditBalance", 0) if teacher_updated else 0,
                 "createdAt": _now_utc(),
             })
             
@@ -1503,6 +1505,8 @@ async def create_rating(
                     {"_id": ratee_id},
                     {"$inc": {"creditBalance": 5, "creditEarned": 5}}
                 )
+                # Re-fetch balance after update
+                ratee_updated = await db.users.find_one({"_id": ratee_id}, {"creditBalance": 1})
                 await db.credit_transactions.insert_one({
                     "_id": str(uuid.uuid4()),
                     "userId": ratee_id,
@@ -1512,7 +1516,7 @@ async def create_rating(
                     "sessionId": payload.sessionId,
                     "type": "bonus",
                     "reason": "High rating bonus (5 stars)",
-                    "balanceAfter": (teacher.get("creditBalance", 0) if teacher and teacher_id == ratee_id else learner.get("creditBalance", 0)) + 5 if learner or teacher else 5,
+                    "balanceAfter": ratee_updated.get("creditBalance", 0) if ratee_updated else 5,
                     "createdAt": _now_utc(),
                 })
             
@@ -1822,12 +1826,14 @@ async def get_skills_catalog():
 async def search_skills(q: str = Query(..., min_length=2)):
     """Search skills by keyword"""
     query_lower = q.strip().lower()
+    # Escape regex special characters for safe regex use
+    query_escaped = re.escape(query_lower)
     
     # Find users who teach or want to learn this skill
     users = await db.users.find({
         "$or": [
-            {"skillsTeach": {"$regex": query_lower, "$options": "i"}},
-            {"skillsLearn": {"$regex": query_lower, "$options": "i"}}
+            {"skillsTeach": {"$regex": query_escaped, "$options": "i"}},
+            {"skillsLearn": {"$regex": query_escaped, "$options": "i"}}
         ]
     }, {"name": 1, "skillsTeach": 1, "skillsLearn": 1, "avgRating": 1, "ratingsCount": 1, "photos": 1}).limit(50).to_list(length=50)
     
@@ -1851,9 +1857,11 @@ async def get_skill_teachers(
 ):
     """Get all users teaching a specific skill"""
     skill_normalized = skill_name.strip().lower()
+    # Escape regex special characters for safe regex use
+    skill_escaped = re.escape(skill_normalized)
     
     users = await db.users.find(
-        {"skillsTeach": {"$regex": f"^{skill_normalized}$", "$options": "i"}},
+        {"skillsTeach": {"$regex": f"^{skill_escaped}$", "$options": "i"}},
         {"name": 1, "age": 1, "bio": 1, "photos": 1, "avgRating": 1, "ratingsCount": 1, "locationCity": 1, "skillsTeach": 1}
     ).sort("avgRating", -1).limit(limit).to_list(length=limit)
     
