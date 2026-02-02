@@ -170,4 +170,31 @@ export async function getMyRatingForSession(sessionId) {
   catch (e) { if (e?.response?.status === 404) return null; throw e; }
 }
 
+// Credits API
+export async function getCreditBalance() { return (await api.get("/credits/balance")).data; }
+export async function getCreditHistory(cursor = null, limit = 30) {
+  return (await api.get("/credits/history", { params: { cursor, limit } })).data;
+}
+
+// User Ratings & Stats API
+export async function getUserRatings(userId, cursor = null, limit = 20) {
+  return (await api.get(`/users/${userId}/ratings`, { params: { cursor, limit } })).data;
+}
+export async function getUserStats(userId) { return (await api.get(`/users/${userId}/stats`)).data; }
+
+// Skills API
+export async function getSkillsCatalog() { return (await api.get("/skills/catalog")).data; }
+export async function searchSkills(query) { return (await api.get("/skills/search", { params: { q: query } })).data; }
+export async function getSkillTeachers(skillName, limit = 20) {
+  return (await api.get(`/skills/${skillName}/teachers`, { params: { limit } })).data;
+}
+
+// Security & Privacy API
+export async function reportUser(userId, reason, description = "") {
+  return (await api.post(`/users/${userId}/report`, { reportedUserId: userId, reason, description })).data;
+}
+export async function blockUser(userId) { return (await api.post(`/users/${userId}/block`)).data; }
+export async function unblockUser(userId) { return (await api.delete(`/users/${userId}/block`)).data; }
+export async function getBlockedUsers() { return (await api.get("/me/blocks")).data; }
+
 export default api;

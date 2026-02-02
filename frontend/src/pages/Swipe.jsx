@@ -4,9 +4,27 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../components/ui/dialog";
 import { Skeleton } from "../components/ui/skeleton";
-import { Heart, X, Star } from "lucide-react";
+import { Heart, X, Star, Sparkles, Info } from "lucide-react";
 import { CORAL, nextProfile } from "../mock";
 import { getCandidates, sendSwipe } from "../lib/api";
+
+// Helper to normalize candidate data from API
+const normalizeCandidate = (c) => ({
+  id: c.id,
+  name: c.name,
+  age: c.age,
+  bio: c.bio,
+  photos: c.photos || [],
+  skillsToTeach: c.skillsTeach || [],
+  skillsToLearn: c.skillsLearn || [],
+  distanceKm: c.distanceKm || 5,
+  avgRating: c.avgRating || 0,
+  ratingsCount: c.ratingsCount || 0,
+  creditBalance: c.creditBalance || 100,
+  matchScore: c.matchScore || 0,
+  matchReasons: c.matchReasons || [],
+  isMutualMatch: c.isMutualMatch || false,
+});
 
 export default function Swipe() {
   const [index, setIndex] = useState(0);
@@ -22,7 +40,7 @@ export default function Swipe() {
       try {
         const d = await getCandidates(0, 10);
         if (!mounted) return;
-        const items = (d.candidates || []).map((c) => ({ ...c.user, _score: c.score }));
+        const items = (d.candidates || []).map(normalizeCandidate);
         setDeck(items);
         setCursor(Number(d.nextCursor || 10));
       } catch (e) {
@@ -37,7 +55,7 @@ export default function Swipe() {
     if (deck.length - index > 3) return;
     try {
       const d = await getCandidates(cursor, 10);
-      const items = (d.candidates || []).map((c) => ({ ...c.user, _score: c.score }));
+      const items = (d.candidates || []).map(normalizeCandidate);
       setDeck((prev) => [...prev, ...items]);
       setCursor(Number(d.nextCursor || (cursor + 10)));
     } catch {}
@@ -105,7 +123,16 @@ export default function Swipe() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-semibold">{p?.name}{p?.age ? `, ${p.age}` : ""}</h3>
-              <p className="text-sm text-muted-foreground">{p?.distanceKm ?? 1} km away</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm text-muted-foreground">{p?.distanceKm ?? 1} km away</p>
+                {p?.avgRating > 0 && (
+                  <div className="flex items-center gap-1 text-xs text-amber-600">
+                    <Star className="h-3 w-3 fill-current" />
+                    <span>{p.avgRating.toFixed(1)}</span>
+                    <span className="text-muted-foreground">({p.ratingsCount})</span>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex gap-1 flex-wrap justify-end max-w-[50%]">
               {(p?.skillsToTeach || []).slice(0,2).map((s) => (
@@ -113,13 +140,45 @@ export default function Swipe() {
               ))}
             </div>
           </div>
-          <p className="text-sm leading-relaxed">{p?.bio}</p>
-          <div className="text-xs text-muted-foreground">
-            Wants to learn: {(p?.skillsToLearn || []).join(", ")}
-          </div>
-          {typeof p?._score === 'number' && (
-            <div className="text-[11px] text-muted-foreground">Score: {p._score}</div>
+          
+          {/* Match Score */}
+          {p?.isMutualMatch && (
+            <div className="flex items-center gap-2 p-2 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-950 dark:to-pink-950 rounded-lg">
+              <Sparkles className="h-4 w-4 text-purple-600" />
+              <span className="text-sm font-semibold text-purple-600">Perfect Match!</span>
+            </div>
           )}
+          {p?.matchScore > 0 && !p?.isMutualMatch && (
+            <div className="flex items-center justify-between p-2 bg-muted/50 rounded-lg">
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-semibold">Match Score</div>
+                <div className="text-xl font-bold text-green-600">{p.matchScore}%</div>
+              </div>
+              {p?.matchReasons?.length > 0 && (
+                <Button variant="ghost" size="sm" className="h-6 px-2">
+                  <Info className="h-3 w-3" />
+                </Button>
+              )}
+            </div>
+          )}
+          
+          {/* Match Reasons */}
+          {p?.matchReasons?.length > 0 && (
+            <div className="text-xs text-muted-foreground space-y-1">
+              {p.matchReasons.slice(0, 2).map((reason, idx) => (
+                <div key={idx} className="flex items-start gap-1">
+                  <span>•</span>
+                  <span>{reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          <p className="text-sm leading-relaxed line-clamp-2">{p?.bio}</p>
+          <div className="text-xs text-muted-foreground">
+            Wants to learn: {(p?.skillsToLearn || []).slice(0, 3).join(", ")}
+            {(p?.skillsToLearn || []).length > 3 && "..."}
+          </div>
         </div>
       </CardContent>
     </Card>
