@@ -1561,7 +1561,7 @@ async def create_rating(
 # -----------------------------------------------------------------------------
 @api.get("/credits/balance")
 @rate_limit(100, 60)
-async def get_credit_balance(user: Any = Depends(get_current_user)):
+async def get_credit_balance(user: Any = Depends(auth_user)):
     u = await db.users.find_one({"_id": user.id}, {
         "creditBalance": 1,
         "creditEarned": 1,
@@ -1576,7 +1576,7 @@ async def get_credit_balance(user: Any = Depends(get_current_user)):
 @api.get("/credits/history")
 @rate_limit(100, 60)
 async def get_credit_history(
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(auth_user),
     limit: int = Query(30, ge=1, le=100),
     cursor: Optional[str] = None
 ):
